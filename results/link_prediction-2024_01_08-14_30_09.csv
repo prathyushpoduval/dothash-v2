@@ -1,0 +1,2 @@
+method,dataset,dimensions,hits@20,hits@50,hits@100,init_time,calc_time,num_node_pairs,device
+dothash-adamic-adar,facebook,2000,0.6607017543859649,0.7533918128654971,0.8003508771929825,0.43579539982602,0.06311829993501306,34200,cpu
