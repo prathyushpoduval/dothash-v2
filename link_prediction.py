@@ -40,7 +40,9 @@ class Arguments(Tap):
             "adamic-adar",
             "common-neighbors",
             "resource-allocation",
+            "hyperhash-jaccard",
             "dothash-jaccard",
+            "hyperhash-adamic-adar",
             "dothash-adamic-adar",
             "dothash-common-neighbors",
             "dothash-resource-allocation",
@@ -55,6 +57,8 @@ class Arguments(Tap):
     result_dir: str = "results"  # directory to write the results to
     device: List[str] = ["cpu"]  # which device to run the experiment on
     seed: List[int] = [1]  # random number generator seed
+    lr: float = 0.1
+    nitr: int = 0
 
 
 class Config(NamedTuple):
@@ -157,6 +161,24 @@ class ResourceAllocation(Method):
         )
 
 
+class HyperHashJaccard(Method):
+    def init_signatures(self, edge_index: LongTensor, num_nodes: int):
+        node_vectors = tools.get_random_node_vectors(
+            num_nodes, self.dimensions, device=self.device
+        )
+        self.signatures = tools.get_node_signatures(
+            edge_index, node_vectors, self.batch_size
+        )
+        self.num_neighbors = tools.get_num_neighbors(edge_index, num_nodes).float()
+
+    def calc_scores(self, node_ids: LongTensor, other_ids: LongTensor) -> Tensor:
+        return tools.hyper_jaccard(
+            self.signatures[node_ids],
+            self.signatures[other_ids],
+            self.num_neighbors[node_ids],
+            self.num_neighbors[other_ids],
+        )
+    
 class DotHashJaccard(Method):
     def init_signatures(self, edge_index: LongTensor, num_nodes: int):
         node_vectors = tools.get_random_node_vectors(
@@ -173,6 +195,41 @@ class DotHashJaccard(Method):
             self.signatures[other_ids],
             self.num_neighbors[node_ids],
             self.num_neighbors[other_ids],
+        )
+
+
+class HyperHashAdamicAdar(Method):
+    def init_signatures(self, edge_index: LongTensor, num_nodes: int):
+        node_vectors = tools.get_random_node_vectors(
+            num_nodes, self.dimensions, device=self.device
+        )
+        node_scaling = tools.get_adamic_adar_node_scaling(edge_index, num_nodes)
+        node_vectors.mul_(node_scaling.unsqueeze(1))
+
+        self.node_vectors = node_vectors
+        self.node_scaling = node_scaling
+        self.edge_index = edge_index
+
+        self.signatures = tools.get_node_signatures(
+            edge_index, node_vectors, self.batch_size
+        )
+
+    def retrain_signatures(self,  nitr: int=1,lr:float=0.1):
+        node_scaling=self.node_scaling
+        node_vectors=self.node_vectors
+        edge_index=self.edge_index
+
+        signatures=self.signatures
+
+        for i in range(nitr):
+            signatures=tools.retrain_node_signatures(edge_index, node_vectors, self.batch_size, node_scaling, signatures, lr)
+
+        self.signatures=signatures
+
+    def calc_scores(self, node_ids: LongTensor, other_ids: LongTensor) -> Tensor:
+        return tools.dot(
+            self.signatures[node_ids],
+            self.signatures[other_ids],
         )
 
 
@@ -194,6 +251,42 @@ class DotHashAdamicAdar(Method):
         )
 
 
+class HyperHashCommonNeighbours(Method):
+    def init_signatures(self, edge_index: LongTensor, num_nodes: int):
+        node_vectors = tools.get_random_node_vectors(
+            num_nodes, self.dimensions, device=self.device
+        )
+        node_scaling = torch.zeros(num_nodes, device=device)+1
+        node_vectors.mul_(node_scaling.unsqueeze(1))
+
+        self.node_vectors = node_vectors
+        self.node_scaling = node_scaling
+        self.edge_index = edge_index
+
+        self.signatures = tools.get_node_signatures(
+            edge_index, node_vectors, self.batch_size
+        )
+
+    def retrain_signatures(self,  nitr: int=1,lr:float=0.1):
+        node_scaling=self.node_scaling
+        node_vectors=self.node_vectors
+        edge_index=self.edge_index
+
+        signatures=self.signatures
+
+        for i in range(nitr):
+            signatures=tools.retrain_node_signatures(edge_index, node_vectors, self.batch_size, node_scaling, signatures, lr)
+
+        self.signatures=signatures
+
+    def calc_scores(self, node_ids: LongTensor, other_ids: LongTensor) -> Tensor:
+        return tools.dot(
+            self.signatures[node_ids],
+            self.signatures[other_ids],
+        )
+
+
+
 class DotHashCommonNeighbors(Method):
     def init_signatures(self, edge_index: LongTensor, num_nodes: int):
         node_vectors = tools.get_random_node_vectors(
@@ -208,6 +301,42 @@ class DotHashCommonNeighbors(Method):
             self.signatures[node_ids],
             self.signatures[other_ids],
         )
+
+
+class HyperHashCommonNeighbours(Method):
+    def init_signatures(self, edge_index: LongTensor, num_nodes: int):
+        node_vectors = tools.get_random_node_vectors(
+            num_nodes, self.dimensions, device=self.device
+        )
+        node_scaling = tools.get_resource_allocation_node_scaling(edge_index, num_nodes)
+        node_vectors.mul_(node_scaling.unsqueeze(1))
+
+        self.node_vectors = node_vectors
+        self.node_scaling = node_scaling
+        self.edge_index = edge_index
+
+        self.signatures = tools.get_node_signatures(
+            edge_index, node_vectors, self.batch_size
+        )
+
+    def retrain_signatures(self,  nitr: int=1,lr:float=0.1):
+        node_scaling=self.node_scaling
+        node_vectors=self.node_vectors
+        edge_index=self.edge_index
+
+        signatures=self.signatures
+
+        for i in range(nitr):
+            signatures=tools.retrain_node_signatures(edge_index, node_vectors, self.batch_size, node_scaling, signatures, lr)
+
+        self.signatures=signatures
+
+    def calc_scores(self, node_ids: LongTensor, other_ids: LongTensor) -> Tensor:
+        return tools.dot(
+            self.signatures[node_ids],
+            self.signatures[other_ids],
+        )
+
 
 
 class DotHashResourceAllocation(Method):
@@ -306,7 +435,7 @@ def evaluate_hits_at(pred_pos: Tensor, pred_neg: Tensor, K: int) -> float:
     return hitsK
 
 
-def executor(args: Arguments, method: Method, dataset, device=None):
+def executor(args: Arguments, method: Method, dataset, retrain=False,device=None):
     graph = dataset.data.to(device)
     split_edge = dataset.get_edge_split()
     pos_test_edge = split_edge["test"]["edge"].to(device)
@@ -315,6 +444,13 @@ def executor(args: Arguments, method: Method, dataset, device=None):
     get_duration = tools.stopwatch()
     method.init_signatures(to_undirected(graph.edge_index), graph.num_nodes)
     init_time = get_duration()
+
+    get_duration = tools.stopwatch()
+    if retrain:
+        method.retrain_signatures(nitr=args.nitr,lr=args.lr)
+    retrain_time = get_duration()
+    print("retrain time:",retrain_time)
+    
 
     pos_scores = []
     neg_scores = []
@@ -368,6 +504,8 @@ def get_hits(result: Result):
 
 
 def get_metrics(conf: Config, args: Arguments, dataset, device=None):
+
+    retrain=False
     if conf.method == "jaccard":
         method_cls = Jaccard
     elif conf.method == "adamic-adar":
@@ -376,10 +514,15 @@ def get_metrics(conf: Config, args: Arguments, dataset, device=None):
         method_cls = CommonNeighbors
     elif conf.method == "resource-allocation":
         method_cls = ResourceAllocation
+    elif conf.method == "hyperhash-jaccard":
+        method_cls = HyperHashJaccard
     elif conf.method == "dothash-jaccard":
         method_cls = DotHashJaccard
     elif conf.method == "dothash-adamic-adar":
         method_cls = DotHashAdamicAdar
+    elif conf.method == "hyperhash-adamic-adar":
+        method_cls = HyperHashAdamicAdar
+        retrain=True
     elif conf.method == "dothash-common-neighbors":
         method_cls = DotHashCommonNeighbors
     elif conf.method == "dothash-resource-allocation":
@@ -393,7 +536,7 @@ def get_metrics(conf: Config, args: Arguments, dataset, device=None):
 
     method = method_cls(conf.dimensions, args.batch_size, device)
 
-    result = executor(args, method, dataset, device=device)
+    result = executor(args, method, dataset,retrain=retrain, device=device)
     total_time = result.init_time + result.calc_time
     num_node_pairs = result.output_pos.size(0) + result.output_neg.size(0)
     hits = get_hits(result)

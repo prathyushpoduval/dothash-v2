@@ -30,7 +30,25 @@ def to_scipy_csr_array(edge_index, num_nodes, values):
 def dot(input: DenseOrSparse, other: DenseOrSparse) -> Tensor:
     return torch.as_tensor((input * other).sum(-1), dtype=torch.float)
 
+def std_pairwise(input: DenseOrSparse, other: DenseOrSparse) -> Tensor:
+    return (input.unsqueeze(1) - other.unsqueeze(0)).std(-1)
     
+def hyper_jaccard(
+    set_a: DenseOrSparse,
+    set_b: DenseOrSparse,
+    size_a: Tensor,
+    size_b: Tensor,
+    eps: float = 1e-8,
+    sig: float = 1/math.sqrt(2),
+):
+    dimensions= set_a.shape[1]
+    sig=sig/math.sqrt(dimensions)
+    size_exc = ((set_a- set_b).std(-1)/sig)**2
+    size_i =(size_a+size_b-size_exc)/2
+    return size_i / (size_a + size_b - size_i + eps)
+
+
+
 def dot_jaccard(
     set_a: DenseOrSparse,
     set_b: DenseOrSparse,
@@ -182,6 +200,28 @@ def get_node_signatures(
         from_node_vectors = torch.index_select(node_vectors, 0, from_batch)
         signatures.index_add_(0, to_batch, from_node_vectors)
 
+    return signatures
+
+def retrain_node_signatures(
+    edge_index: LongTensor, node_vectors: Tensor, batch_size: int,
+      from_scaling_list: Tensor, signatures:Tensor, lr:float=0.1, t:float=0.05 ) -> Tensor:
+    to_nodes, from_nodes = edge_index
+
+    to_batches = torch.split(to_nodes, batch_size)
+    from_batches = torch.split(from_nodes, batch_size)
+
+
+    for to_batch, from_batch in zip(to_batches, from_batches):
+        from_node_vectors = torch.index_select(node_vectors, 0, from_batch)
+        from_scaling=torch.index_select(from_scaling_list, 0, from_batch)
+        to_signatures=signatures.index_select(0, to_batch)
+
+        from_scaling_estimate=dot( to_signatures,from_node_vectors)
+        sign=(from_scaling_estimate-from_scaling)
+        mask=(torch.abs(sign)>t).float()
+        sign=sign*mask
+
+        signatures.index_add_(0, to_batch,-sign.unsqueeze(1)*lr*from_node_vectors)
     return signatures
 
 
