@@ -279,8 +279,7 @@ class DotHashJaccard(Method):
         )
 
 
-class HyperHashAdamicAdar(HyperMethod):
-    def scaling(self,edge_index: LongTensor, num_nodes: int):
+
 class HyperHashAdamicAdar(HyperMethod):
     def scaling(self,edge_index: LongTensor, num_nodes: int):
         node_scaling = tools.get_adamic_adar_node_scaling(edge_index, num_nodes)
