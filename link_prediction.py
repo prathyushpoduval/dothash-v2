@@ -44,7 +44,9 @@ class Arguments(Tap):
             "dothash-jaccard",
             "hyperhash-adamic-adar",
             "dothash-adamic-adar",
+            "hyperhash-common-neighbors",
             "dothash-common-neighbors",
+            "hyperhash-resource-allocation",
             "dothash-resource-allocation",
             "minhash",
             "simhash",
@@ -59,6 +61,7 @@ class Arguments(Tap):
     seed: List[int] = [1]  # random number generator seed
     lr: float = 0.1
     nitr: int = 0
+    binarize: bool = False
 
 
 class Config(NamedTuple):
@@ -105,6 +108,82 @@ class Method:
 
     def calc_scores(self, node_ids: LongTensor, other_ids: LongTensor) -> Tensor:
         NotImplemented
+
+
+
+class HyperMethod(Method):
+    def init_signatures(self, edge_index: LongTensor, num_nodes: int):
+        node_vectors = tools.get_random_node_vectors(
+            num_nodes, self.dimensions, device=self.device
+        )
+        node_scaling = self.scaling(edge_index, num_nodes)
+        node_vectors.mul_(node_scaling.unsqueeze(1))
+
+        self.node_vectors = node_vectors
+        self.node_scaling = node_scaling
+        self.edge_index = edge_index
+
+        self.signatures = tools.get_node_signatures(
+            edge_index, node_vectors, self.batch_size
+        )
+        
+
+        
+
+        
+
+    def scaling(self,edge_index: LongTensor, num_nodes: int):
+        NotImplemented
+
+
+    def retrain_signatures(self,  nitr: int=1,lr:float=0.1):
+
+        
+        node_scaling=self.node_scaling
+        node_vectors=self.node_vectors
+        edge_index=self.edge_index
+
+
+        signatures=self.signatures
+
+        for _ in range(nitr):
+            self.retrain_signatures_itr(edge_index, node_vectors, self.batch_size, node_scaling, signatures, lr)
+
+
+    def retrain_signatures_itr(self,
+        edge_index: LongTensor, node_vectors: Tensor, batch_size: int,
+        from_scaling_list: Tensor, signatures:Tensor, lr:float=0.1, t:float=0.00 ):
+
+        to_nodes, from_nodes = edge_index
+        
+        to_batches = torch.split(to_nodes, batch_size)  
+        from_batches = torch.split(from_nodes, batch_size)
+
+        
+        dimensions=node_vectors.shape[1]
+
+        for to_batch, from_batch in zip(to_batches, from_batches):
+            from_node_vectors = torch.index_select(node_vectors, 0, from_batch)
+            from_scaling=torch.index_select(from_scaling_list, 0, from_batch)
+            to_signatures=signatures.index_select(0, to_batch)
+
+            from_scaling_estimate=tools.dot( to_signatures,from_node_vectors)
+            sign=(from_scaling_estimate-from_scaling**2) #Remember square root is attached
+            mask=(torch.abs(sign)>t).float()
+            sign=sign*mask
+
+            signatures.index_add_(0, to_batch,-sign.unsqueeze(1)*lr*from_node_vectors)
+
+
+
+    def calc_scores(self, node_ids: LongTensor, other_ids: LongTensor) -> Tensor:
+        
+        return tools.dot(
+            self.signatures[node_ids],
+            self.signatures[other_ids],
+        )
+
+
 
 
 class Jaccard(Method):
@@ -198,39 +277,11 @@ class DotHashJaccard(Method):
         )
 
 
-class HyperHashAdamicAdar(Method):
-    def init_signatures(self, edge_index: LongTensor, num_nodes: int):
-        node_vectors = tools.get_random_node_vectors(
-            num_nodes, self.dimensions, device=self.device
-        )
+class HyperHashAdamicAdar(HyperMethod):
+    def scaling(self,edge_index: LongTensor, num_nodes: int):
         node_scaling = tools.get_adamic_adar_node_scaling(edge_index, num_nodes)
-        node_vectors.mul_(node_scaling.unsqueeze(1))
+        return node_scaling
 
-        self.node_vectors = node_vectors
-        self.node_scaling = node_scaling
-        self.edge_index = edge_index
-
-        self.signatures = tools.get_node_signatures(
-            edge_index, node_vectors, self.batch_size
-        )
-
-    def retrain_signatures(self,  nitr: int=1,lr:float=0.1):
-        node_scaling=self.node_scaling
-        node_vectors=self.node_vectors
-        edge_index=self.edge_index
-
-        signatures=self.signatures
-
-        for i in range(nitr):
-            signatures=tools.retrain_node_signatures(edge_index, node_vectors, self.batch_size, node_scaling, signatures, lr)
-
-        self.signatures=signatures
-
-    def calc_scores(self, node_ids: LongTensor, other_ids: LongTensor) -> Tensor:
-        return tools.dot(
-            self.signatures[node_ids],
-            self.signatures[other_ids],
-        )
 
 
 class DotHashAdamicAdar(Method):
@@ -250,40 +301,10 @@ class DotHashAdamicAdar(Method):
             self.signatures[other_ids],
         )
 
+class HyperHashCommonNeighbours(HyperMethod):
+    def scaling(self,edge_index: LongTensor, num_nodes: int):
+        return torch.zeros(num_nodes, device=device)+1
 
-class HyperHashCommonNeighbours(Method):
-    def init_signatures(self, edge_index: LongTensor, num_nodes: int):
-        node_vectors = tools.get_random_node_vectors(
-            num_nodes, self.dimensions, device=self.device
-        )
-        node_scaling = torch.zeros(num_nodes, device=device)+1
-        node_vectors.mul_(node_scaling.unsqueeze(1))
-
-        self.node_vectors = node_vectors
-        self.node_scaling = node_scaling
-        self.edge_index = edge_index
-
-        self.signatures = tools.get_node_signatures(
-            edge_index, node_vectors, self.batch_size
-        )
-
-    def retrain_signatures(self,  nitr: int=1,lr:float=0.1):
-        node_scaling=self.node_scaling
-        node_vectors=self.node_vectors
-        edge_index=self.edge_index
-
-        signatures=self.signatures
-
-        for i in range(nitr):
-            signatures=tools.retrain_node_signatures(edge_index, node_vectors, self.batch_size, node_scaling, signatures, lr)
-
-        self.signatures=signatures
-
-    def calc_scores(self, node_ids: LongTensor, other_ids: LongTensor) -> Tensor:
-        return tools.dot(
-            self.signatures[node_ids],
-            self.signatures[other_ids],
-        )
 
 
 
@@ -303,39 +324,12 @@ class DotHashCommonNeighbors(Method):
         )
 
 
-class HyperHashCommonNeighbours(Method):
-    def init_signatures(self, edge_index: LongTensor, num_nodes: int):
-        node_vectors = tools.get_random_node_vectors(
-            num_nodes, self.dimensions, device=self.device
-        )
-        node_scaling = tools.get_resource_allocation_node_scaling(edge_index, num_nodes)
-        node_vectors.mul_(node_scaling.unsqueeze(1))
+class HyperHashResourceAllocation(HyperMethod):
+   
+    def scaling(self,edge_index: LongTensor, num_nodes: int):
+        return tools.get_resource_allocation_node_scaling(edge_index, num_nodes)
 
-        self.node_vectors = node_vectors
-        self.node_scaling = node_scaling
-        self.edge_index = edge_index
 
-        self.signatures = tools.get_node_signatures(
-            edge_index, node_vectors, self.batch_size
-        )
-
-    def retrain_signatures(self,  nitr: int=1,lr:float=0.1):
-        node_scaling=self.node_scaling
-        node_vectors=self.node_vectors
-        edge_index=self.edge_index
-
-        signatures=self.signatures
-
-        for i in range(nitr):
-            signatures=tools.retrain_node_signatures(edge_index, node_vectors, self.batch_size, node_scaling, signatures, lr)
-
-        self.signatures=signatures
-
-    def calc_scores(self, node_ids: LongTensor, other_ids: LongTensor) -> Tensor:
-        return tools.dot(
-            self.signatures[node_ids],
-            self.signatures[other_ids],
-        )
 
 
 
@@ -523,8 +517,14 @@ def get_metrics(conf: Config, args: Arguments, dataset, device=None):
     elif conf.method == "hyperhash-adamic-adar":
         method_cls = HyperHashAdamicAdar
         retrain=True
+    elif conf.method == "hyperhash-common-neighbors":
+        method_cls = HyperHashCommonNeighbours
+        retrain=True
     elif conf.method == "dothash-common-neighbors":
         method_cls = DotHashCommonNeighbors
+    elif conf.method == "hyperhash-resource-allocation":
+        method_cls = HyperHashResourceAllocation
+        retrain=True
     elif conf.method == "dothash-resource-allocation":
         method_cls = DotHashResourceAllocation
     elif conf.method == "minhash":

@@ -23,6 +23,7 @@ class Arguments(Tap):
     method: List[
         Literal[
             "dothash",
+            "hyperhash",
             "minhash",
             "simhash",
         ]
@@ -35,6 +36,8 @@ class Arguments(Tap):
     device: List[str] = ["cpu"]  # which device to run the experiment on
     seed: List[int] = [1]  # random number generator seed
     start: List[int] = [0] # the index of the first document to use
+    lr: float = 0.1
+    nitr: int = 0
 
 
 class Config(NamedTuple):
@@ -205,6 +208,45 @@ def get_metrics(conf: Config, args: Arguments, df_info, df_pairs, device=None):
                 for j in w_shingle(value["description"], 2):
                     hv_doc = torchhd.bundle(hv_doc, words_dict[j])
                 documents_dict[key] = hv_doc
+
+        if conf.method == "hyperhash":
+            for key, value in tqdm(documents.items()):
+                aux_dict = {}
+                for j in w_shingle(value["description"], 2):
+                    if j not in words_dict1 and j not in aux_dict:
+                        words_dict1[j] = 1
+                        aux_dict[j] = 1
+                    elif j not in aux_dict:
+                        words_dict1[j] += 1
+                        aux_dict[j] = 1
+
+            documents_dict = {}
+
+            dimensions = conf.dimensions
+            del documents_dict
+            del adamic_adar_res
+            del words_dict
+            documents_dict = {}
+            num_dcs = len(documents)
+            adamic_adar_res = {}
+            words_dict = {}
+            torch.cuda.empty_cache()
+            for k, v in tqdm(words_dict1.items()):
+                if v > 1:
+                    words_dict[k] = ((np.sqrt(num_dcs / v))) * torchhd.random(
+                        1, dimensions, device=device
+                    ).mul_(math.sqrt(1 / dimensions))
+                else:
+                    words_dict[k] = torchhd.random(
+                        1, dimensions, device=device
+                    ).mul_(math.sqrt(1 / dimensions))
+
+            for index, (key, value) in enumerate(tqdm(documents.items())):
+                hv_doc = torch.zeros(dimensions, device=device)
+                for j in w_shingle(value["description"], 2):
+                    hv_doc = torchhd.bundle(hv_doc, words_dict[j])
+                documents_dict[key] = hv_doc
+
 
         elif conf.method == "minhash":
             count = 0
