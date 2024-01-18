@@ -230,21 +230,32 @@ def get_metrics(conf: Config, args: Arguments, df_info, df_pairs, device=None):
             num_dcs = len(documents)
             adamic_adar_res = {}
             words_dict = {}
+            words_scale={}
             torch.cuda.empty_cache()
             for k, v in tqdm(words_dict1.items()):
                 if v > 1:
                     words_dict[k] = ((np.sqrt(num_dcs / v))) * torchhd.random(
                         1, dimensions, device=device
                     ).mul_(math.sqrt(1 / dimensions))
+                    words_scale[k] = ((np.sqrt(num_dcs / v)))
                 else:
                     words_dict[k] = torchhd.random(
                         1, dimensions, device=device
                     ).mul_(math.sqrt(1 / dimensions))
+                    words_scale[k] = 1
 
             for index, (key, value) in enumerate(tqdm(documents.items())):
                 hv_doc = torch.zeros(dimensions, device=device)
                 for j in w_shingle(value["description"], 2):
                     hv_doc = torchhd.bundle(hv_doc, words_dict[j])
+
+                nitr=config.nitr
+                lr=config.lr
+                for n in range(nitr):
+                    for j in w_shingle(value["description"], 2):
+                        scaling_estimate=tools.dot(hv_doc,words_dict[j])
+                        sign=(scaling_estimate-words_scale[j]**2)
+                        hv_doc=hv_doc-lr*sign*words_dict[j]
                 documents_dict[key] = hv_doc
 
 
@@ -342,7 +353,7 @@ def get_metrics(conf: Config, args: Arguments, df_info, df_pairs, device=None):
                     .to(device)
                 )
 
-                if conf.method == "dothash":
+                if conf.method == "dothash" or conf.method == "hyperhash":
                     result = tools.dot(
                         values[index].expand(len(compare_vals), dimensions).to(device),
                         compare_vals,
