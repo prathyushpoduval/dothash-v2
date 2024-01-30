@@ -306,7 +306,7 @@ class DotHashAdamicAdar(Method):
 
 class HyperHashCommonNeighbours(HyperMethod):
     def scaling(self,edge_index: LongTensor, num_nodes: int):
-        return torch.zeros(num_nodes, device=device)+1
+        return torch.zeros(num_nodes, device=self.device)+1
 
 
 

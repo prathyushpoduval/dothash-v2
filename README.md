@@ -15,6 +15,9 @@ pip install -r requirements.txt
 
 The experiments are divided into two parts: (1) link prediction and (2) document deduplication. The experiments can be run using the following commands:
 
+
+python link_prediction.py --dataset ogbl-ddi ogbl-ppa ogbl-collab soc-epinions1 soc-livejournal1 soc-pokec soc-slashdot0811 soc-slashdot0922 facebook wikipedia --method jaccard adamic-adar common-neighbors resource-allocation hyperhash-jaccard dothash-jaccard hyperhash-adamic-adar dothash-adamic-adar hyperhash-common-neighbors dothash-common-neighbors hyperhash-resource-allocation dothash-resource-allocation minhash simhash --lr 0.1 --dimensions 1000 
+
 ### Link Prediction
 
 ```bash

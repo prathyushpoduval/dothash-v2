@@ -249,8 +249,8 @@ def get_metrics(conf: Config, args: Arguments, df_info, df_pairs, device=None):
                 for j in w_shingle(value["description"], 2):
                     hv_doc = torchhd.bundle(hv_doc, words_dict[j])
 
-                nitr=config.nitr
-                lr=config.lr
+                nitr=args.nitr
+                lr=args.lr
                 for n in range(nitr):
                     for j in w_shingle(value["description"], 2):
                         scaling_estimate=tools.dot(hv_doc,words_dict[j])
@@ -353,7 +353,13 @@ def get_metrics(conf: Config, args: Arguments, df_info, df_pairs, device=None):
                     .to(device)
                 )
 
-                if conf.method == "dothash" or conf.method == "hyperhash":
+                if conf.method == "dothash":
+                    result = tools.dot(
+                        values[index].expand(len(compare_vals), dimensions).to(device),
+                        compare_vals,
+                    )
+
+                elif conf.method == "hyperhash":
                     result = tools.dot(
                         values[index].expand(len(compare_vals), dimensions).to(device),
                         compare_vals,
