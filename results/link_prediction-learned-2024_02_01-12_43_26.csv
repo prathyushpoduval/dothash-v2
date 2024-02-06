@@ -1,0 +1,2 @@
+method,dataset,dimensions,hits@20,hits@50,hits@100,init_time,calc_time,num_node_pairs,device
+hyperlearn,ogbl-collab,1000,0.3188499215470082,0.40967728255799163,0.5142784445104109,11.17673010006547,0.3447440000018105,235810,cpu

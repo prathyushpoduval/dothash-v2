@@ -33,6 +33,7 @@ class Arguments(Tap):
             "soc-slashdot0922",
             "facebook",
             "wikipedia",
+           
         ]
     ]
     # the dataset to run the experiment on
@@ -125,6 +126,7 @@ def find_thresh(pos_sim:Tensor,neg_sim:Tensor):
             print("False Positive Rate:",current_pos_indx/total_pos)
             print(total_neg,total_pos,n,current_pos_indx)
             return t
+    return t
         
 
 
@@ -149,6 +151,7 @@ class HyperLearnMethod(Method):
             node_vectors = tools.get_random_node_vectors(
                 num_nodes, self.dimensions, device=self.device
             )
+            #print(node_vectors)
       
 
         self.node_vectors = node_vectors
@@ -229,7 +232,7 @@ class HyperLearnMethod(Method):
 
 
         T=find_thresh(pos_similarity,neg_similarity)
-        print(T)
+        #print(T)
 
 
 
@@ -275,7 +278,7 @@ class HyperLearnMethod(Method):
     def calc_scores(self, node_ids: LongTensor, other_ids: LongTensor) -> Tensor:
         
         return tools.cdot(
-            self.memory[node_ids],
+            self.node_vectors[node_ids],
             self.memory[other_ids],
         )
 
@@ -334,7 +337,7 @@ def evaluate_hits_at(pred_pos: Tensor, pred_neg: Tensor, K: int) -> float:
         return 1.0
 
     kth_score_in_negative_edges = torch.topk(pred_neg, K)[0][-1]
-    print(kth_score_in_negative_edges)
+    #print(kth_score_in_negative_edges)
     num_hits = torch.sum(pred_pos > kth_score_in_negative_edges).cpu()
     hitsK = float(num_hits) / len(pred_pos)
     return hitsK
@@ -520,7 +523,7 @@ def main(conf: Config, args: Arguments, result_file: str):
             try:
                 a=dataset.x
                 print("Node Features detected")
-                print(a)
+                #print(a)
                 print("Node Features in the dataset reader")
             except:
                 print("No Node Features detected")
@@ -530,16 +533,16 @@ def main(conf: Config, args: Arguments, result_file: str):
                 print("No Node Features detected")
                 return -1
 
-        try:
-            metrics = get_metrics(conf, args, dataset, device=conf.device,write=write)
-            metrics["method"] = conf.method
-            metrics["dataset"] = conf.dataset
-            metrics["device"] = conf.device.type
-            metrics["use_node_features"] = conf.use_node_features
-            metrics["nitr"]=args.nitr
-            write(metrics)
-        except Exception as e:
-            print(e)
+        #try:
+        metrics = get_metrics(conf, args, dataset, device=conf.device,write=write)
+        metrics["method"] = conf.method
+        metrics["dataset"] = conf.dataset
+        metrics["device"] = conf.device.type
+        metrics["use_node_features"] = conf.use_node_features
+        metrics["nitr"]=args.nitr
+        write(metrics)
+        #except Exception as e:
+        #    print(e)
 
 
 def default_to_cpu(device: str) -> torch.device:

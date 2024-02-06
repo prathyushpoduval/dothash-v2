@@ -1,0 +1,2 @@
+method,dataset,dimensions,hits@20,hits@50,hits@100,init_time,calc_time,num_node_pairs,device
+hyperhash-adamic-adar,ogbl-collab,1000,0.06866109780051372,0.11055710246282026,0.15426622633771503,1.580339299980551,0.2736393000232056,146329,cpu

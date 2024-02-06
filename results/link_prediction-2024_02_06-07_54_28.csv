@@ -1,0 +1,2 @@
+method,dataset,dimensions,hits@20,hits@50,hits@100,init_time,calc_time,num_node_pairs,device
+hyperhash-adamic-adar,wikipedia,100,0.12766331070007025,0.1589206274877078,0.19731912900959964,0.038721999851986766,0.0034352000802755356,34168,cpu

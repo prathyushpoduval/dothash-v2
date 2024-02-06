@@ -1,0 +1,2 @@
+method,dataset,dimensions,hits@20,hits@50,hits@100,init_time,calc_time,num_node_pairs,device,nitr,use_node_features
+hyperlearn,facebook,1000,0.62953216374269,0.7087134502923976,0.7591228070175439,2.062998300185427,0.020375499967485666,34200,cpu,,0
