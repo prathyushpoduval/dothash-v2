@@ -27,7 +27,7 @@ def to_scipy_csr_array(edge_index, num_nodes, values):
     return ssp.csr_array((values, (edge_index[0], edge_index[1])), shape=(num_nodes, num_nodes))
 
 def cdot(input: DenseOrSparse, other: DenseOrSparse) -> Tensor:
-    return torch.as_tensor((torch.conj(input) * other).sum(-1), dtype=torch.float)
+    return torch.as_tensor(torch.real((torch.conj(input) * other).sum(-1)), dtype=torch.float)
 
 def dot(input: DenseOrSparse, other: DenseOrSparse) -> Tensor:
     return torch.as_tensor((input * other).sum(-1), dtype=torch.float)

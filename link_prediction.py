@@ -16,6 +16,8 @@ from torch_geometric.utils import negative_sampling, to_undirected
 
 import tools
 
+import matplotlib.pyplot as plt
+
 
 class Arguments(Tap):
     dataset: List[
@@ -423,12 +425,28 @@ class LinkPredDataset:
 
 
 def evaluate_hits_at(pred_pos: Tensor, pred_neg: Tensor, K: int) -> float:
+
+    
+
     if len(pred_neg) < K:
         return 1.0
+    
+    
 
     kth_score_in_negative_edges = torch.topk(pred_neg, K)[0][-1]
     num_hits = torch.sum(pred_pos > kth_score_in_negative_edges).cpu()
     hitsK = float(num_hits) / len(pred_pos)
+
+    #print("kth_score_in_negative_edges",kth_score_in_negative_edges)
+    #print("num_hits",num_hits)
+    #print("hitsK",hitsK)
+    #print("len(pred_pos)",len(pred_pos))
+
+    #plt.hist(pred_pos.cpu().numpy(), bins=100, alpha=0.5, label='pos')
+    #plt.hist(pred_neg.cpu().numpy(), bins=100, alpha=0.5, label='neg')
+    #plt.legend(loc='upper right')
+    #plt.show()
+
     return hitsK
 
 
@@ -540,6 +558,8 @@ def get_metrics(conf: Config, args: Arguments, dataset, device=None):
     method = method_cls(conf.dimensions, args.batch_size, device)
 
     result = executor(args, method, dataset,retrain=retrain, device=device)
+    
+
     total_time = result.init_time + result.calc_time
     num_node_pairs = result.output_pos.size(0) + result.output_neg.size(0)
     hits = get_hits(result)

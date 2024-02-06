@@ -16,10 +16,15 @@ from torch_geometric.utils import negative_sampling, to_undirected
 
 import tools
 
+import matplotlib.pyplot as plt
+
+
 
 class Arguments(Tap):
     dataset: List[
         Literal[
+            "ogbl-ddi",
+            "ogbl-ppa",
             "ogbl-collab",
             "soc-epinions1",
             "soc-livejournal1",
@@ -34,10 +39,7 @@ class Arguments(Tap):
     dataset_dir: str = "data"  # directory containing the dataset files
     method: List[
         Literal[
-            "hyperhash-adamic-adar",
-            "hyperhash-common-neighbors",
-            "hyperhash-common-neighbors",
-            "hyperhash-resource-allocation",
+            "hyperlearn",
         ]
     ]
     # method to run the experiment with
@@ -50,6 +52,7 @@ class Arguments(Tap):
     lr: float = 0.1
     nitr: int = 0
     binarize: bool = False
+    use_node_features: List[int] = [0]
 
 
 class Config(NamedTuple):
@@ -58,6 +61,7 @@ class Config(NamedTuple):
     dimensions: int  # number of dimensions to use (does not affect the exact method)
     device: torch.device  # which device to run the experiment on
     seed: int  # random number generator seed
+    use_node_features: int
 
 
 class Result(NamedTuple):
@@ -79,6 +83,8 @@ METRICS = [
     "calc_time",
     "num_node_pairs",
     "device",
+    "nitr",
+    "use_node_features",
 ]
 
 
@@ -98,11 +104,37 @@ class Method:
         NotImplemented
 
 
+def find_thresh(pos_sim:Tensor,neg_sim:Tensor):
+    pos_sim=sorted(pos_sim)
+    neg_sim=sorted(neg_sim)
+
+    total_neg=len(neg_sim)
+    total_pos=len(pos_sim)
+
+
+    current_pos_indx=0
+
+    for n in range(total_neg):
+        t=neg_sim[n]
+        while pos_sim[current_pos_indx]<t and current_pos_indx<total_pos-1:
+            current_pos_indx+=1
+
+        if (total_neg-n)/total_neg<current_pos_indx/total_pos:
+            print("Threshold:",t)
+            print("False Negative Rate:",(total_neg-n)/total_neg)
+            print("False Positive Rate:",current_pos_indx/total_pos)
+            print(total_neg,total_pos,n,current_pos_indx)
+            return t
+        
+
+
 
 class HyperLearnMethod(Method):
-    def init_signatures(self, edge_index: LongTensor, num_nodes: int, nodeFeatures = None):
+    def init_signatures(self, edge_index: LongTensor, edge_neg_index: LongTensor,num_nodes: int, nodeFeatures = None):
 
         if nodeFeatures is not None:
+
+            print("Node Features is not None")
             randon_matrix=torch.randn(nodeFeatures.shape[1],self.dimensions,device=self.device)
             
             M=nodeFeatures@randon_matrix
@@ -118,23 +150,19 @@ class HyperLearnMethod(Method):
                 num_nodes, self.dimensions, device=self.device
             )
       
-        node_scaling = self.scaling(edge_index, num_nodes)**2
-        node_vectors_scaled=node_scaling.unsqueeze(1)*node_vectors
 
         self.node_vectors = node_vectors
-        self.node_vectors_scaled = node_vectors_scaled
-        self.node_scaling = node_scaling
+        self.memory = tools.get_node_signatures(
+            edge_index, node_vectors, self.batch_size
+        ) -tools.get_node_signatures(
+            edge_neg_index, node_vectors, self.batch_size
+           )
+       
+
         self.edge_index = edge_index
+        self.edge_neg_index = edge_neg_index
 
-        self.signatures_scaled = tools.get_node_signatures(
-            edge_index, node_vectors_scaled, self.batch_size
-        )*0
-        print("signatures scaled")
-
-        self.signatures = tools.get_node_signatures(edge_index, node_vectors, self.batch_size)
-        print("signatures")
-        print("retrained")
-        
+        self.retrain_signatures(1,0.1)
 
         
 
@@ -147,72 +175,109 @@ class HyperLearnMethod(Method):
     def retrain_signatures(self,  nitr: int=1,lr:float=0.1):
 
         
-        node_scaling=self.node_scaling
-        node_vectors_scaled=self.node_vectors_scaled
         node_vectors=self.node_vectors
+        memory=self.memory
         edge_index=self.edge_index
+        edge_neg_index=self.edge_neg_index
 
 
         #signatures=self.signatures
-        signatures_scaled=self.signatures_scaled
 
         for _ in range(nitr):
-            self.retrain_signatures_itr(edge_index, node_vectors,node_vectors_scaled,self.batch_size, node_scaling, signatures_scaled, lr)
+            self.retrain_signatures_itr(edge_index, edge_neg_index, node_vectors,memory,self.batch_size, lr)
 
 
     def retrain_signatures_itr(self,
-        edge_index: LongTensor, node_vectors: Tensor, node_vectors_scaled: Tensor,batch_size: int,
-        from_scaling_list: Tensor, signatures_scaled:Tensor, lr:float=0.1, t:float=0.00 ):
+        edge_index: LongTensor, edge_neg_index: LongTensor, node_vectors: Tensor, memory: Tensor,batch_size: int,
+        lr:float=0.1, t:float=0.00 ):
 
         to_nodes, from_nodes = edge_index
-        
-        to_batches = torch.split(to_nodes, batch_size)  
-        from_batches = torch.split(from_nodes, batch_size)
+        to_neg_nodes, from_neg_nodes=edge_neg_index
 
-        
-        dimensions=node_vectors.shape[1]
+        pos_similarity=[]
+        neg_similarity=[]
+
+
+        sub_sample_size=min(10000,len(to_nodes),len(to_neg_nodes))
+
+        sample=torch.randperm(len(to_nodes))[:sub_sample_size]
+        to_batches = torch.split(to_nodes[sample], batch_size)  
+        from_batches = torch.split(from_nodes[sample], batch_size)
 
         for to_batch, from_batch in zip(to_batches, from_batches):
-            from_node_vectors = torch.index_select(node_vectors, 0, from_batch)
-            from_node_vectors_scaled = torch.index_select(node_vectors_scaled, 0, from_batch)
-            from_scaling=torch.index_select(from_scaling_list, 0, from_batch)
-            to_signatures_scaled=signatures_scaled.index_select(0, to_batch)
+            from_vec = torch.index_select(node_vectors, 0, from_batch)
+            to_memory = torch.index_select(memory, 0, to_batch)
 
-            from_scaling_estimate=torch.real(tools.cdot( to_signatures_scaled,from_node_vectors))
+            pos_similarity.append(tools.cdot(to_memory,from_vec))
 
-            print(from_scaling_estimate)
-            print(from_scaling)
+        sample=torch.randperm(len(to_neg_nodes))[:sub_sample_size]
+        to_neg_batches = torch.split(to_neg_nodes[sample], batch_size)
+        from_neg_batches = torch.split(from_neg_nodes[sample], batch_size)
 
-            sign=(from_scaling_estimate-from_scaling) #Remember square root is attached
+        for to_neg_batch, from_neg_batch in zip(to_neg_batches, from_neg_batches):
+            from_neg_vec = torch.index_select(node_vectors, 0, from_neg_batch)
+            to_neg_memory = torch.index_select(memory, 0, to_neg_batch)
 
-            mask=(torch.abs(sign)>t).float()
-            sign=sign*mask
+            neg_similarity.append(tools.cdot(to_neg_memory,from_neg_vec))
 
-            signatures_scaled.index_add_(0, to_batch,-sign.unsqueeze(1)*lr*from_node_vectors_scaled)
+        pos_similarity = torch.cat(pos_similarity)
+        neg_similarity = torch.cat(neg_similarity)
+
+        
+        #sub_sample_pos=pos_similarity[]
+        #sub_sample_neg=neg_similarity[torch.randperm(len(neg_similarity))[:sub_sample_size]]
+
+
+        T=find_thresh(pos_similarity,neg_similarity)
+        print(T)
+
+
+
+
+    
+
+        #plt.hist(pos_similarity.cpu().detach().numpy(), bins=1000, alpha=0.5, label='pos')
+        #plt.hist(neg_similarity.cpu().detach().numpy(), bins=1000, alpha=0.5, label='neg')
+        #plt.legend(loc='upper right')
+        #plt.show()
+
+        to_batches = torch.split(to_nodes, batch_size)  
+        from_batches = torch.split(from_nodes, batch_size)
+        
+
+        for to_batch, from_batch in zip(to_batches, from_batches):
+            from_vec = torch.index_select(node_vectors, 0, from_batch)
+            to_memory = torch.index_select(memory, 0, to_batch)
+            sim_val= tools.cdot(to_memory,from_vec)
+            mask=(sim_val<T).float()
+            sign=-mask
+            #sign=(sim_val-T)*mask #Remember square root is attached
+
+            memory.index_add_(0, to_batch,-sign.unsqueeze(1)*lr*from_vec)
+
+
+        to_neg_batches = torch.split(to_neg_nodes, batch_size)
+        from_neg_batches = torch.split(from_neg_nodes, batch_size)
+
+        for to_neg_batch, from_neg_batch in zip(to_neg_batches, from_neg_batches):
+            
+            from_neg_vec = torch.index_select(node_vectors, 0, from_neg_batch)
+            to_neg_memory = torch.index_select(memory, 0, to_neg_batch)
+            sim_val= tools.cdot(to_neg_memory,from_neg_vec)
+            mask=(sim_val>T).float()
+
+            sign=(sim_val-T)*mask
+
+            memory.index_add_(0, to_neg_batch,-sign.unsqueeze(1)*lr*from_neg_vec)
 
 
 
     def calc_scores(self, node_ids: LongTensor, other_ids: LongTensor) -> Tensor:
         
         return tools.cdot(
-            self.signatures_scaled[node_ids],
-            self.signatures[other_ids],
+            self.memory[node_ids],
+            self.memory[other_ids],
         )
-
-class HyperHashAdamicAdar(HyperLearnMethod):
-    def scaling(self,edge_index: LongTensor, num_nodes: int):
-        node_scaling = tools.get_adamic_adar_node_scaling(edge_index, num_nodes)
-        return node_scaling
-
-
-class HyperHashCommonNeighbours(HyperLearnMethod):
-    def scaling(self,edge_index: LongTensor, num_nodes: int):
-        return torch.zeros(num_nodes, device=self.device)+1
-
-class HyperHashResourceAllocation(HyperLearnMethod):
-   
-    def scaling(self,edge_index: LongTensor, num_nodes: int):
-        return tools.get_resource_allocation_node_scaling(edge_index, num_nodes)
 
 
 
@@ -229,12 +294,12 @@ class LinkPredDataset:
         num_edges = graph.num_edges
         num_test_edges = num_edges // 20
 
-        self.edge_neg = negative_sampling(
+        edge_neg = negative_sampling(
             edge_index=edge_index,
             num_nodes=num_nodes,
             method="sparse",
             force_undirected=True,
-            num_neg_samples=num_test_edges,
+            num_neg_samples=num_edges,
         )
 
         permuted_indices = torch.randperm(num_edges)
@@ -242,7 +307,10 @@ class LinkPredDataset:
         self.data = Data(
             edge_index=edge_index[:, permuted_indices[num_test_edges:]],
             num_nodes=num_nodes,
+            edge_neg_index=edge_neg[:,num_test_edges:],
         )
+
+        self.edge_neg=edge_neg[:, :num_test_edges]
 
         try:
             self.x=graph.x
@@ -266,24 +334,75 @@ def evaluate_hits_at(pred_pos: Tensor, pred_neg: Tensor, K: int) -> float:
         return 1.0
 
     kth_score_in_negative_edges = torch.topk(pred_neg, K)[0][-1]
+    print(kth_score_in_negative_edges)
     num_hits = torch.sum(pred_pos > kth_score_in_negative_edges).cpu()
     hitsK = float(num_hits) / len(pred_pos)
     return hitsK
 
 
-def executor(args: Arguments, method: Method, dataset, retrain=False,device=None):
+def executor(args: Arguments, method: Method, dataset, conf, retrain=False,device=None,write=None):
     graph = dataset.data.to(device)
     split_edge = dataset.get_edge_split()
     pos_test_edge = split_edge["test"]["edge"].to(device)
     neg_test_edge = split_edge["test"]["edge_neg"].to(device)
 
     get_duration = tools.stopwatch()
-    method.init_signatures(to_undirected(graph.edge_index), graph.num_nodes, nodeFeatures=dataset.x)
+    method.init_signatures(to_undirected(graph.edge_index),to_undirected(graph.edge_neg_index), graph.num_nodes, nodeFeatures=dataset.x)
     init_time = get_duration()
 
     get_duration = tools.stopwatch()
     if retrain:
-        method.retrain_signatures(nitr=args.nitr,lr=args.lr)
+
+        
+        pos_test_edge_loader = pos_test_edge.split(args.batch_size)
+        neg_test_edge_loader = neg_test_edge.split(args.batch_size)
+        for n in range(args.nitr):
+
+            if write is not None:
+
+                pos_scores = []
+                neg_scores = []
+
+                for edge_batch in tqdm(pos_test_edge_loader, leave=False):
+                    node_ids, other_ids = edge_batch[:, 0], edge_batch[:, 1]
+                    scores = method.calc_scores(node_ids, other_ids)
+                    pos_scores.append(scores.cpu())
+
+                for edge_batch in tqdm(neg_test_edge_loader, leave=False):
+                    node_ids, other_ids = edge_batch[:, 0], edge_batch[:, 1]
+                    scores = method.calc_scores(node_ids, other_ids)
+                    neg_scores.append(scores.cpu())
+
+                pos_scores = torch.cat(pos_scores)
+                neg_scores = torch.cat(neg_scores)
+
+                dimensions = method.node_vectors.shape[1]
+
+                res= Result(pos_scores, neg_scores, -1, -1, dimensions)
+                hits=get_hits(res)
+
+                out={
+                    "dimensions": res.dimensions,
+                    "hits@20": hits[0],
+                    "hits@50": hits[1],
+                    "hits@100": hits[2],
+                    "init_time": res.init_time,
+                    "calc_time": res.calc_time,
+                    "num_node_pairs": res.output_pos.size(0) + res.output_neg.size(0),
+                }
+
+                out["method"] = conf.method
+                out["dataset"] = conf.dataset
+                out["device"] = conf.device.type
+                out["nitr"]=n
+                out["use_node_features"] = conf.use_node_features
+                write(out)
+
+
+
+            method.retrain_signatures(nitr=1,lr=args.lr)
+
+            
     retrain_time = get_duration()
     print("retrain time:",retrain_time)
     
@@ -308,14 +427,15 @@ def executor(args: Arguments, method: Method, dataset, retrain=False,device=None
     pos_scores = torch.cat(pos_scores)
     neg_scores = torch.cat(neg_scores)
 
-    dimensions = method.signatures.shape[1]
+    dimensions = method.node_vectors.shape[1]
 
     return Result(pos_scores, neg_scores, init_time, calc_time, dimensions)
 
 
 def get_dataset(name: str, root: str):
     if name.startswith("ogbl-"):
-        return PygLinkPropPredDataset(name, root)
+        dataset= PygLinkPropPredDataset(name, root)
+        return LinkPredDataset(dataset.data)
     elif name.startswith("soc-"):
         dataset = SNAPDataset(root, name)
         return LinkPredDataset(dataset.data)
@@ -339,28 +459,26 @@ def get_hits(result: Result):
     return tuple(output)
 
 
-def get_metrics(conf: Config, args: Arguments, dataset, device=None):
+def get_metrics(conf: Config, args: Arguments, dataset, device=None,write=None):
 
     retrain=False
    
-    if conf.method == "hyperhash-common-neighbors":
-        method_cls = HyperHashCommonNeighbours
-        retrain=True
-    elif conf.method == "hyperhash-adamic-adar":
-        method_cls = HyperHashAdamicAdar
-        retrain=True
-    elif conf.method == "hyperhash-common-neighbors":
-        method_cls = HyperHashCommonNeighbours
-        retrain=True
-    elif conf.method == "hyperhash-resource-allocation":
-        method_cls = HyperHashResourceAllocation
+    if conf.method == "hyperlearn":
+        method_cls = HyperLearnMethod
         retrain=True
     else:
         raise NotImplementedError(f"requested method {conf.method} is not implemented")
 
     method = method_cls(conf.dimensions, args.batch_size, device)
 
-    result = executor(args, method, dataset,retrain=retrain, device=device)
+    result = executor(args, method, dataset,conf,retrain=retrain, device=device,write=write)
+    #print("Shape out: ", result.output_pos.shape, result.output_neg.shape)
+
+    #plt.hist(result.output_pos.cpu().detach().numpy(), bins=1000, alpha=0.5, label='pos')
+    #plt.hist(result.output_neg.cpu().detach().numpy(), bins=1000, alpha=0.5, label='neg')
+    #plt.legend(loc='upper right')
+    #plt.show()
+
     total_time = result.init_time + result.calc_time
     num_node_pairs = result.output_pos.size(0) + result.output_neg.size(0)
     hits = get_hits(result)
@@ -394,18 +512,31 @@ def main(conf: Config, args: Arguments, result_file: str):
 
         print("Dataset:", conf.dataset)
         dataset = get_dataset(conf.dataset, args.dataset_dir)
-        try:
-            a=dataset.x
-            print("Node Features detected")
-        except:
-            print("No Node Features detected")
-            return -1
+
+        if not conf.use_node_features:
+            dataset.x = None
+            print("Not using Node Features")
+        else:
+            try:
+                a=dataset.x
+                print("Node Features detected")
+                print(a)
+                print("Node Features in the dataset reader")
+            except:
+                print("No Node Features detected")
+                return -1
+            
+            if dataset.x is None:
+                print("No Node Features detected")
+                return -1
 
         try:
-            metrics = get_metrics(conf, args, dataset, device=conf.device)
+            metrics = get_metrics(conf, args, dataset, device=conf.device,write=write)
             metrics["method"] = conf.method
             metrics["dataset"] = conf.dataset
             metrics["device"] = conf.device.type
+            metrics["use_node_features"] = conf.use_node_features
+            metrics["nitr"]=args.nitr
             write(metrics)
         except Exception as e:
             print(e)
@@ -435,7 +566,7 @@ if __name__ == "__main__":
 
     devices = {default_to_cpu(d) for d in args.device}
 
-    options = (args.seed, devices, args.dimensions, args.dataset, args.method)
-    for seed, device, dimensions, dataset, method in itertools.product(*options):
-        config = Config(dataset, method, dimensions, device, seed)
+    options = (args.seed, devices, args.dimensions, args.dataset, args.method, args.use_node_features)
+    for seed, device, dimensions, dataset, method, use_node_features in itertools.product(*options):
+        config = Config(dataset, method, dimensions, device, seed, use_node_features)
         main(config, args, result_file)
