@@ -533,16 +533,16 @@ def main(conf: Config, args: Arguments, result_file: str):
                 print("No Node Features detected")
                 return -1
 
-        #try:
-        metrics = get_metrics(conf, args, dataset, device=conf.device,write=write)
-        metrics["method"] = conf.method
-        metrics["dataset"] = conf.dataset
-        metrics["device"] = conf.device.type
-        metrics["use_node_features"] = conf.use_node_features
-        metrics["nitr"]=args.nitr
-        write(metrics)
-        #except Exception as e:
-        #    print(e)
+        try:
+            metrics = get_metrics(conf, args, dataset, device=conf.device,write=write)
+            metrics["method"] = conf.method
+            metrics["dataset"] = conf.dataset
+            metrics["device"] = conf.device.type
+            metrics["use_node_features"] = conf.use_node_features
+            metrics["nitr"]=args.nitr
+            write(metrics)
+        except Exception as e:
+            print(e)
 
 
 def default_to_cpu(device: str) -> torch.device:
